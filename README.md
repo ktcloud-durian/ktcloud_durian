@@ -41,3 +41,5 @@ commit / PR / issue / actions 채널로 구분되어 전송됩니다. 처음 설
 ## 담당
 
 CI/CD 메인 / 보조: (이름 기입)
+
+<!-- runner test -->
