@@ -46,3 +46,15 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  notify:
+    # Draft PR(검사 생략)이나 취소된 실행은 알리지 않음
+    if: ${{ always() && needs.test.result != 'skipped' && !contains(needs.*.result, 'cancelled') }}
+    needs: [test, docker-verify]
+    uses: ./.github/workflows/_notify.yml
+    secrets: inherit
+    with:
+      kind: ci
+      status: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
+      test_result: ${{ needs.test.result }}
+      docker_result: ${{ needs.docker-verify.result }}
