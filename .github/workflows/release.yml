@@ -16,12 +16,12 @@ permissions:
   packages: write
 
 env:
-  # GHCR ?��?지 ?�름?� ?�문?�여???? ?�래 build ?�계?�서 ?�문?�로 변??
+  # GHCR 이미지 이름은 소문자여야 함. 아래 build 단계에서 소문자로 변환
   REGISTRY: ghcr.io
 
 jobs:
   build:
-    # 기본: ubuntu-latest / self-hosted ?�환: Repository variable BUILD_RUNNER = ["self-hosted","linux","ec2"]
+    # 기본: ubuntu-latest / self-hosted 전환: Repository variable BUILD_RUNNER = ["self-hosted","linux","ec2"]
     runs-on: ${{ fromJSON(vars.BUILD_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 20
     outputs:
@@ -58,9 +58,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # 배포 = gitops ?�?�소???��?지 ?�그�??�정??push (?�후 ArgoCD가 반영)
-  # ?�요: Secret GITOPS_TOKEN (fine-grained PAT, gitops ?�?�소 Contents: Read and write)
-  # ?�택: Variable GITOPS_REPO (기본 ktcloud-durian/cicd-platform-gitops)
+  # 배포 = gitops 저장소의 이미지 태그를 수정해 push (이후 ArgoCD가 반영)
+  # 필요: Secret GITOPS_TOKEN (fine-grained PAT, gitops 저장소 Contents: Read and write)
+  # 선택: Variable GITOPS_REPO (기본 ktcloud-durian/cicd-platform-gitops)
   deploy-staging:
     needs: build
     runs-on: ubuntu-latest
@@ -89,8 +89,8 @@ jobs:
             git pull --rebase origin main
           done
 
-  # production Environment??Required reviewers�??�정?�면 ?�인 ???�행??
-  # prod ArgoCD Application?� ?�동 Sync?��?�?Argo UI?�서 Sync?�야 ?�제 반영??
+  # production Environment에 Required reviewers를 설정하면 승인 후 실행됨
+  # prod ArgoCD Application은 수동 Sync이므로 Argo UI에서 Sync해야 실제 반영됨
   deploy-prod:
     needs: [build, deploy-staging]
     runs-on: ubuntu-latest
