@@ -3,9 +3,20 @@ name: Notify
 on:
   workflow_call:
     inputs:
+      kind:
+        required: true
+        type: string        # ci | release
       status:
         required: true
+        type: string        # success | failure
+      tag:
+        required: false
         type: string
+        default: ''
+      results:
+        required: false
+        type: string
+        default: ''         # 예: test=success,docker=failure
     secrets:
       DISCORD_WEBHOOK_URL:
         required: false
@@ -18,25 +29,42 @@ jobs:
       - name: Send Discord message
         env:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          KIND: ${{ inputs.kind }}
           STATUS: ${{ inputs.status }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
+          TAG: ${{ inputs.tag }}
+          RESULTS: ${{ inputs.results }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           ACTOR: ${{ github.actor }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$WEBHOOK" ]; then
-            echo "DISCORD_WEBHOOK_URL 이 설정되지 않아 알림을 건너뜁니다."
+            echo "DISCORD_WEBHOOK_URL 이 없어 알림을 건너뜁니다. (fork/Dependabot PR 또는 시크릿 미설정)"
             exit 0
           fi
-          if [ "$STATUS" = "success" ]; then
-            TITLE="✅ 배포 성공"; COLOR=3066993
+          NL=$'\n'
+          icon() { case "$1" in success) echo "✅";; failure) echo "❌";; cancelled) echo "⏹";; skipped) echo "⏭";; *) echo "•";; esac; }
+
+          DETAIL=""
+          IFS=',' read -ra ITEMS <<< "$RESULTS"
+          for it in "${ITEMS[@]}"; do
+            [ -z "$it" ] && continue
+            DETAIL="${DETAIL:+$DETAIL · }${it%%=*} $(icon "${it#*=}")"
+          done
+
+          if [ "$KIND" = "release" ]; then
+            NAME="릴리스"; REF="${TAG:-${SHA:0:7}}"
+            if [ "$STATUS" = "success" ]; then NEXT="다음: prod는 Argo CD에서 수동 Sync 해주세요"; else NEXT="다음: 실패한 job 로그를 확인해주세요"; fi
           else
-            TITLE="❌ 파이프라인 실패"; COLOR=15158332
+            NAME="CI"; REF="$BRANCH"
+            if [ "$STATUS" = "success" ]; then NEXT="다음: 리뷰 승인 후 머지해주세요"; else NEXT="다음: 실패 로그를 보고 수정 후 push 해주세요"; fi
           fi
+          if [ "$STATUS" = "success" ]; then TITLE="✅ $NAME 성공 · $REF"; COLOR=3066993; else TITLE="❌ $NAME 실패 · $REF"; COLOR=15158332; fi
+          DESC="${DETAIL:+$DETAIL$NL}$ACTOR · ${SHA:0:7} · [실행 보기]($RUN_URL)"
+
           jq -n \
-            --arg title "$TITLE" \
-            --arg desc "**$REPO** @ ${SHA:0:7}\nby $ACTOR" \
-            --arg url "$RUN_URL" \
-            --argjson color "$COLOR" \
-            '{embeds: [{title: $title, description: ($desc | gsub("\\\\n"; "\n")), url: $url, color: $color}]}' \
-          | curl -sS -f -H "Content-Type: application/json" -d @- "$WEBHOOK"
+            --arg title "$TITLE" --arg desc "$DESC" --arg url "$RUN_URL" \
+            --arg next "$NEXT" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson color "$COLOR" \
+            '{embeds: [{title: $title, description: $desc, url: $url, color: $color, footer: {text: $next}, timestamp: $ts}]}' \
+          | curl -sS -f --retry 5 --retry-all-errors --retry-delay 5 \
+              -H "Content-Type: application/json" -d @- "$WEBHOOK"
