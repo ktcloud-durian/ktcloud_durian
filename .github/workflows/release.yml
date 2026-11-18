@@ -129,4 +129,7 @@ jobs:
     uses: ./.github/workflows/_notify.yml
     secrets: inherit
     with:
+      kind: release
+      tag: ${{ needs.build.outputs.tag }}
       status: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
+      results: build=${{ needs.build.result }},staging=${{ needs.deploy-staging.result }},prod=${{ needs.deploy-prod.result }}

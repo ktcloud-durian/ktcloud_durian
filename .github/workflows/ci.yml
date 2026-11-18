@@ -46,3 +46,13 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  notify:
+    needs: [test, docker-verify]
+    if: ${{ always() && github.event.pull_request.draft == false && !contains(needs.*.result, 'cancelled') }}
+    uses: ./.github/workflows/_notify.yml
+    secrets: inherit
+    with:
+      kind: ci
+      status: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
+      results: test=${{ needs.test.result }},docker=${{ needs.docker-verify.result }}
