@@ -1,0 +1,59 @@
+# 노트북에서 두리안뱅크 전체 실행 (MariaDB + core-api + web)
+# 네트워크를 둘로 나눠서 web은 DB에 직접 닿지 못함 → "서비스는 밖에, 데이터는 안에"를 로컬에서도 똑같이 (DAT-04)
+# 실행: cp .env.example .env (값 바꾸기) → docker compose up -d --build → http://localhost:8080
+services:
+  db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?.env 필요}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?.env 필요}
+      TZ: Asia/Seoul
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - db-data:/var/lib/mysql
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  core-api:   # 온프렘 역할: 고객 DB를 다루는 내부 API. 밖으로 포트를 열지 않음
+    build: ./services/core-api
+    environment:
+      DB_HOST: db
+      DB_USER: durian_app
+      DB_PASSWORD: ${APP_DB_PASSWORD}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?.env 필요}
+      SEED_DEMO: "true"
+      DEMO_PASSWORD: ${DEMO_PASSWORD:?.env 필요}
+      TZ: Asia/Seoul
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [data, app]
+    read_only: true
+    restart: unless-stopped
+
+  web:        # AWS 역할: 화면과 로그인. DB 네트워크에는 붙지 않음
+    build:                            # 화면(frontend)까지 같이 빌드하려고 저장소 루트에서 빌드
+      context: .
+      dockerfile: services/web/Dockerfile
+    environment:
+      CORE_API_URL: http://core-api:4000
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      JWT_SECRET: ${JWT_SECRET:?.env 필요}
+      COOKIE_SECURE: "false"          # 로컬 http라서. 실제 배포(HTTPS)에서는 지우기
+      SHOW_BREACH_BANNER: ${SHOW_BREACH_BANNER:-false}
+      SERVED_FROM: "로컬 (AWS 역할)"
+    depends_on: [core-api]
+    networks: [app]
+    ports: ["127.0.0.1:8080:3000"]
+    read_only: true
+    restart: unless-stopped
+
+networks:
+  data: {}
+  app: {}
+
+volumes:
+  db-data:

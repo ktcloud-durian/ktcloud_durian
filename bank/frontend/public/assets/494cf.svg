@@ -1,0 +1,8 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="51.2" height="40" viewBox="0 0 51.2 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="left-coin-stack">
+<path id="Vector" d="M0.6 10H50.6V30C50.6 36 39.6 40 25.6 40C11.6 40 0.6 36 0.6 30V10Z" fill="#AEA9A1"/>
+<path id="Vector_2" d="M0.6 20C0.6 26 11.6 30 25.6 30C39.6 30 50.6 26 50.6 20" stroke-width="1.2" stroke="#918D86"/>
+<path id="Vector_3" d="M25.6 20C39.4071 20 50.6 15.5228 50.6 10C50.6 4.47715 39.4071 0 25.6 0C11.7929 0 0.6 4.47715 0.6 10C0.6 15.5228 11.7929 20 25.6 20Z" fill="#D5D2CB"/>
+<path id="Vector_4" d="M44.1 10C44.1 13.5346 35.8173 16.4 25.6 16.4C15.3827 16.4 7.1 13.5346 7.1 10C7.1 6.46538 15.3827 3.60001 25.6 3.60001C35.8173 3.60001 44.1 6.46538 44.1 10Z" stroke-width="1.2" stroke="#B7B1A7"/>
+</g>
+</svg>
