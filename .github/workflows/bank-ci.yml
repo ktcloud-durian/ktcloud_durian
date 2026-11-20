@@ -1,0 +1,95 @@
+# 두리안뱅크 웹(bank/) 검사. 담당: 보안(송윤지)
+# test:    core-api·web 단위 테스트
+# semgrep: 앱 코드의 위험한 패턴 (SQL 인젝션, 하드코딩된 비밀값 등) — PIP-01
+# image:   Dockerfile 설정 + 이미지 취약점 (HIGH 이상이면 실패) — PIP-02, SRV-03
+# bank/ 를 바꾼 PR에서만 실행. 기존 app/ 검사(ci.yml, security-scan.yml)와 따로 돌아감
+name: Bank CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bank/**'
+      - '.github/workflows/bank-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'bank/**'
+      - '.github/workflows/bank-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bank-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SEMGREP_VERSION: "1.186.0"
+  TRIVY_VERSION: "0.76.2"
+  TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        service: [core-api, web]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install
+        working-directory: bank/services/${{ matrix.service }}
+        run: npm ci --ignore-scripts
+      - name: Test
+        working-directory: bank/services/${{ matrix.service }}
+        run: npm test
+
+  semgrep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install semgrep (버전 고정)
+        run: pipx install "semgrep==${SEMGREP_VERSION}"
+      - name: Scan (발견되면 실패)
+        run: semgrep scan --config p/javascript --config p/nodejs --config p/typescript --config p/secrets --metrics=off --error bank/
+
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - name: web
+            context: bank
+            dockerfile: bank/services/web/Dockerfile
+          - name: core-api
+            context: bank/services/core-api
+            dockerfile: bank/services/core-api/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # trivy-action 은 2026-03 태그 변조 사고(CVE-2026-33634)가 있어 쓰지 않고 공식 바이너리를 체크섬으로 확인
+      - name: Install trivy (체크섬 확인)
+        run: |
+          set -euo pipefail
+          f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfL -o "$f" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${f}"
+          echo "${TRIVY_SHA256}  ${f}" | sha256sum -c -
+          tar -xzf "$f" trivy && sudo install -m 0755 trivy /usr/local/bin/trivy
+      - name: Dockerfile 설정 검사
+        run: trivy config --severity HIGH,CRITICAL --exit-code 1 ${{ matrix.dockerfile }}
+      - name: Build image (push 없음)
+        run: docker build -f ${{ matrix.dockerfile }} -t bank-${{ matrix.name }}:scan ${{ matrix.context }}
+      - name: Image 취약점 검사 (HIGH 이상이면 실패, 패치 없는 것은 제외)
+        run: trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 bank-${{ matrix.name }}:scan
