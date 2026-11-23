@@ -1,0 +1,59 @@
+# 앱 보안 검사 (보안 기준서 PIP-01~03, SRV-03, 시연 1). 담당: 보안(송윤지)
+# semgrep: 앱 코드의 위험한 패턴(SQL 인젝션, 하드코딩된 비밀값 등)
+# trivy:   컨테이너 이미지 취약점 + Dockerfile 설정
+# main 규칙 집합에서 "Security Scan / semgrep", "/ image" 를 필수 상태 검사로 지정 → 통과한 코드만 main에 들어가고, release가 그 코드로만 이미지를 올림
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SEMGREP_VERSION: "1.186.0"
+  TRIVY_VERSION: "0.76.2"
+  TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install semgrep (버전 고정)
+        run: pipx install "semgrep==${SEMGREP_VERSION}"
+      - name: Scan (발견되면 실패)
+        run: semgrep scan --config p/javascript --config p/nodejs --config p/secrets --metrics=off --error app/
+
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # trivy-action 은 2026-03 태그 변조 사고(CVE-2026-33634)가 있어 쓰지 않고 공식 바이너리를 체크섬으로 확인
+      - name: Install trivy (체크섬 확인)
+        run: |
+          set -euo pipefail
+          f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfL -o "$f" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${f}"
+          echo "${TRIVY_SHA256}  ${f}" | sha256sum -c -
+          tar -xzf "$f" trivy && sudo install -m 0755 trivy /usr/local/bin/trivy
+      - name: Dockerfile 설정 검사
+        run: trivy config --severity HIGH,CRITICAL --exit-code 1 Dockerfile
+      - name: Build image (push 없음)
+        run: docker build -t app:scan .
+      - name: Image 취약점 검사 (HIGH 이상이면 실패, 패치 없는 것은 제외)
+        run: trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 app:scan
