@@ -24,6 +24,10 @@ jobs:
     # 기본: ubuntu-latest / self-hosted 전환: Repository variable BUILD_RUNNER = ["self-hosted","linux","ec2"]
     runs-on: ${{ fromJSON(vars.BUILD_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # cosign 키 없는 서명 (GitHub OIDC). 이 job에만 줌
     outputs:
       tag: ${{ steps.vars.outputs.tag }}
       image: ${{ steps.vars.outputs.image }}
@@ -53,7 +57,8 @@ jobs:
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: true
@@ -61,6 +66,25 @@ jobs:
             ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # 공급망 보안 (보안 기준서 PIP-06, 포트폴리오): 올린 이미지의 SBOM(부품 목록)을 만들고, 이미지와 SBOM에 서명
+      # 서명은 키 없이 GitHub OIDC로 (Sigstore). 태그가 아니라 digest에 서명해서 바꿔치기를 막음
+      - name: SBOM 만들기 (SPDX)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ steps.vars.outputs.image }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      - name: 이미지 서명 + SBOM 첨부
+        env:
+          REF: ${{ steps.vars.outputs.image }}@${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "$REF"
+          cosign attest --yes --type spdxjson --predicate sbom.spdx.json "$REF"
+          echo "서명한 이미지: ${REF}" >> "$GITHUB_STEP_SUMMARY"
 
   # 배포 = gitops 저장소의 이미지 태그를 수정해 push (이후 ArgoCD가 반영)
   # 필요: Secret GITOPS_TOKEN (fine-grained PAT, gitops 저장소 Contents: Read and write)
