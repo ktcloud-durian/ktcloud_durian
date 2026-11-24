@@ -4,9 +4,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
+    # paths-ignore를 쓰면 문서만 바꾼 PR에서 필수 검사(test·docker-verify)가 아예 안 떠서 병합이 막힘.
+    # 그래서 항상 실행하고, 문서만 바뀐 PR이면 아래 changes 결과로 job을 '건너뜀'으로 끝냄 (건너뜀 = 필수 검사 통과)
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -16,8 +15,31 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  changes:
     if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          files=$(git diff --name-only "$BASE" "$HEAD")
+          if [ -n "$files" ] && ! grep -Ev '(\.md$|^docs/)' <<<"$files" >/dev/null; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ${{ fromJSON(vars.BUILD_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
@@ -33,7 +55,8 @@ jobs:
         run: npm test
 
   docker-verify:
-    if: github.event.pull_request.draft == false
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     # 이미지 빌드 검증 (push 없음). runner 전환은 repo 변수 BUILD_RUNNER 참고
     runs-on: ${{ fromJSON(vars.BUILD_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 15
@@ -48,8 +71,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   notify:
-    needs: [test, docker-verify]
-    if: ${{ always() && github.event.pull_request.draft == false && !contains(needs.*.result, 'cancelled') }}
+    needs: [changes, test, docker-verify]
+    if: ${{ always() && github.event.pull_request.draft == false && needs.changes.outputs.docs_only != 'true' && !contains(needs.*.result, 'cancelled') }}
     uses: ./.github/workflows/_notify.yml
     secrets: inherit
     with:
