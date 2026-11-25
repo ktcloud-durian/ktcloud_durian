@@ -1,0 +1,102 @@
+# 두리안뱅크 이미지 배포. 담당: 보안(송윤지)
+# main에 bank/가 바뀌면: 이미지 빌드 → Trivy 검사(HIGH 이상이면 중단) → 통과한 이미지만 GHCR에 커밋 SHA 태그로 올림
+#                       → gitops 저장소 apps/durian-bank 의 newTag 갱신 (ArgoCD가 반영, 처음엔 수동 Sync)
+# 이미지: ghcr.io/ktcloud-durian/durian-bank-web (AWS k3s), ghcr.io/ktcloud-durian/durian-bank-core-api (OpenStack k3s)
+# latest 태그는 쓰지 않음 (보안 기준서 PIP-06, 예외 EX-06: ECR 전환 전까지 GHCR + 커밋 SHA 태그)
+name: Bank Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bank/**'
+      - '.github/workflows/bank-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bank-release
+  cancel-in-progress: false
+
+env:
+  TRIVY_VERSION: "0.76.2"
+  TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write          # GHCR에 올리는 이 job에만
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: web
+            context: bank
+            dockerfile: bank/services/web/Dockerfile
+          - name: core-api
+            context: bank/services/core-api
+            dockerfile: bank/services/core-api/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install trivy (체크섬 확인)
+        run: |
+          set -euo pipefail
+          f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfL -o "$f" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${f}"
+          echo "${TRIVY_SHA256}  ${f}" | sha256sum -c -
+          tar -xzf "$f" trivy && sudo install -m 0755 trivy /usr/local/bin/trivy
+      - name: Build
+        env:
+          IMAGE: ghcr.io/ktcloud-durian/durian-bank-${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_SHA::7}"
+          docker build -f "${{ matrix.dockerfile }}" -t "${IMAGE}:${tag}" "${{ matrix.context }}"
+          echo "REF=${IMAGE}:${tag}" >> "$GITHUB_ENV"
+      - name: Image 취약점 검사 (HIGH 이상이면 올리지 않음)
+        run: trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$REF"
+      - name: Push (검사 통과한 이미지만)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          docker push "$REF"
+          docker logout ghcr.io
+
+  gitops:
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Update durian-bank tags in gitops repo
+        env:
+          GITOPS_REPO: ${{ vars.GITOPS_REPO || 'ktcloud-durian/cicd-platform-gitops' }}
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GITOPS_TOKEN" ]; then echo "::error::GITOPS_TOKEN secret is not set"; exit 1; fi
+          tag="${GITHUB_SHA::7}"
+          git clone -q "https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" gitops
+          cd gitops
+          for o in aws onprem; do
+            f="apps/durian-bank/overlays/${o}/kustomization.yaml"
+            [ -f "$f" ] || { echo "::error::$f 없음 (gitops 저장소에 durian-bank가 먼저 병합돼야 함)"; exit 1; }
+            sed -i -E "s|^(\s*newTag:).*|\1 ${tag}|" "$f"
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then echo "no change"; exit 0; fi
+          git commit -qam "deploy(durian-bank): ${tag} (${GITHUB_REPOSITORY}@${tag})"
+          for _ in 1 2 3; do
+            git push -q origin HEAD:main && break
+            git pull -q --rebase origin main
+          done

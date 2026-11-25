@@ -19,7 +19,9 @@ export function createApp({ config, core }) {
   const auth = createAuth(config);
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 1); // ALB 뒤에서 실제 접속 IP를 씀
+  // 앞에 있는 프록시 수만큼 X-Forwarded-For를 믿음 (k3s: ALB → Traefik 이라 2, 로컬·ALB 직결은 1)
+  // 너무 크게 잡으면 접속자가 헤더로 IP를 속일 수 있으므로 실제 구조와 같게 (로그인 시도 제한 IAM-03)
+  app.set('trust proxy', config.trustProxyHops ?? 1);
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {

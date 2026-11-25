@@ -15,5 +15,6 @@ export function loadConfig() {
     cookieSecure: process.env.COOKIE_SECURE !== 'false', // 로컬 http에서만 false
     showBreachBanner: process.env.SHOW_BREACH_BANNER === 'true',
     servedFrom: process.env.SERVED_FROM || 'AWS 서울 리전',
+    trustProxyHops: Math.min(Math.max(Number(process.env.TRUST_PROXY_HOPS || 1), 0), 3),
   };
 }
